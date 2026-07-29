@@ -1,0 +1,7 @@
+deberta_ner_model/
+
+venv_ner/
+venv_cv/
+
+__pycache__/
+.DS_Store
