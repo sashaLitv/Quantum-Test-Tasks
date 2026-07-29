@@ -1,0 +1,8 @@
+datasets==5.0.0
+ipython==9.15.0
+nervaluate==1.2.1
+numpy==2.5.1
+Requests==2.34.2
+tensorflow==2.21.0
+tf_keras==2.21.0
+transformers==4.57.6
