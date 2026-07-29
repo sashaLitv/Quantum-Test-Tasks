@@ -45,7 +45,7 @@ id2label = {i: label for i, label in enumerate(label_list)}
 # Dataset Loading/Reading & Data Preparation  
 # ==========================================
 try:
-    GITHUB_URL = "https://raw.githubusercontent.com/sashaLitv/Quantum-Test-Taks/main/src/dataset/himalayas_ner_dataset.json"
+    GITHUB_URL = "https://raw.githubusercontent.com/sashaLitv/Quantum-Test-Taks/Natural Language Processing. Named entity recognition/src/dataset/himalayas_ner_dataset.json"
     response = requests.get(GITHUB_URL)
     response.raise_for_status()  
     raw_data = response.json()
