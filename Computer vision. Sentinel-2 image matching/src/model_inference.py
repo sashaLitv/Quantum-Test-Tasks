@@ -25,9 +25,9 @@ class MatchResult:
 class MatchingPipeline:
     """Pipeline for processing and matching satellite images across tiles."""
     
-    def __init__(self, tile_size=512, ransac_threshold=3.0):
+    def __init__(self, tile_size=512, ransac_threshold=3.0, device='cpu'):
         self.preprocessor = ImagePreprocessor(tile_size)
-        self.matcher = SatelliteMatcher()
+        self.matcher = SatelliteMatcher(device)
         self.ransac_threshold = ransac_threshold
 
     def _filter_outliers(self, pts0, pts1):

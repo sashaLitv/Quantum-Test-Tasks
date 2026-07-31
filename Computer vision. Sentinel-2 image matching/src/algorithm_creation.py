@@ -4,6 +4,7 @@ import kornia
 import rasterio
 from rasterio.windows import Window
 import numpy as np
+import torch
 
 
 class ImagePreprocessor:
@@ -28,7 +29,7 @@ class ImagePreprocessor:
         return padded_tile
 
     def extract_tiles(self, image_path):
-        '''Generator that yields image tiles as TensorFlow tensors and their global coordinates.'''
+        '''Generator that yields image tiles as tensors and their global coordinates.'''
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"The file '{image_path}' does not exist.")
         
@@ -51,26 +52,27 @@ class ImagePreprocessor:
 
 class SatelliteMatcher:
     '''Handles feature matching between satellite image tiles using the SOTA LoFTR model.'''
-    def __init__(self):
-        self.matcher = kornia.feature.LoFTR(pretrained='outdoor')
+    def __init__(self, device='cpu'):
+        self.device = device
+        self.matcher = kornia.feature.LoFTR(pretrained='outdoor').to(self.device)
 
-    def __call__(self, tile_tensor0, tile_tensor1, coord0, coord1):
+    def __call__(self, tile_tensor0 :torch.Tensor, tile_tensor1: torch.Tensor, coord0, coord1):
         '''
             Executes the matching algorithm on a pair of tensors 
             and calculates global coordinates for the keypoints.
         '''
         input_dict = {
-            "image0": tile_tensor0,
-            "image1": tile_tensor1
+            "image0": tile_tensor0.to(self.device),
+            "image1": tile_tensor1.to(self.device),
         }
 
         output_dict = self.matcher(input_dict)
-        mkpts0_local = output_dict['keypoints0'].numpy()
-        mkpts1_local = output_dict['keypoints1'].numpy()
-        confidences = output_dict['confidence'].numpy()
+        mkpts0_local = output_dict['keypoints0'].cpu().numpy()
+        mkpts1_local = output_dict['keypoints1'].cpu().numpy()
+        confidences = output_dict['confidence'].cpu().numpy()
 
-        offset0 = np.array([coord0[0], coord0[1]])
-        offset1 = np.array([coord1[0], coord1[1]])
+        offset0 = np.asarray(coord0, dtype=np.float32)
+        offset1 = np.asarray(coord1, dtype=np.float32)
 
         mkpts0_global = mkpts0_local + offset0
         mkpts1_global = mkpts1_local + offset1
