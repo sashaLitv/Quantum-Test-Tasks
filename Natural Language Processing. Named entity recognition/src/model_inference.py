@@ -108,7 +108,7 @@ class MountainDetector:
             if tag == "O":
                 html_out += f"<span>{word} </span>"
             else:
-                # If is mountain (B-MOUNTAIN або I-MOUNTAIN), highlight
+                ## If is mountain (B-MOUNTAIN або I-MOUNTAIN), highlight
                 color = "#00ff886a" 
                 html_out += f"<span style='background-color: {color}; padding: 2px 5px; border-radius: 4px; font-weight: 500; margin-right: 4px;'>{word}</span>"
                 

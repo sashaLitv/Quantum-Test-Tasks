@@ -2,6 +2,7 @@ deberta_ner_model/
 
 venv_ner/
 venv_cv/
+.env
 
 __pycache__/
 .DS_Store

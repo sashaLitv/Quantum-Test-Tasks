@@ -70,9 +70,9 @@ dataset_dict = DatasetDict({
     "test": temp_test_dataset["test"]
 })
 
-# ==========================================
+# ======================================================
 # Tokenization using the official Hugging Face tutorial
-# ==========================================
+# =======================================================
 tokenizer = AutoTokenizer.from_pretrained(MODEL_CHECKPOINT)
 def tokenize_and_align_labels(examples):
     ''' 

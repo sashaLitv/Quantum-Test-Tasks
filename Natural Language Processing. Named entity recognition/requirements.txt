@@ -6,3 +6,8 @@ Requests==2.34.2
 tensorflow==2.21.0
 tf_keras==2.21.0
 transformers==4.57.6
+python-dotenv==1.0.1
+google-generativeai==0.8.3
+matplotlib==3.11.1
+seaborn==0.13.2
+matplotlib-venn==1.1.2
