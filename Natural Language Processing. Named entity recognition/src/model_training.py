@@ -109,31 +109,43 @@ def _(test_data: list, model, tokenizer, batch_size=16):
     ## call LEVEL 3 to perform inference and compute metrics
     all_true_labels, all_pred_labels = evaluate_model(tf_test_dataset, model, tokenizer, batch_size)
 
-    print("\n--- Error Analysis (Spurious / False Positives) ---")
+    print("\n--- Error аnalysis ---")
     
     ## iterate through the predictions to find false positives
     for i, (true_seq, pred_seq) in enumerate(zip(all_true_labels, all_pred_labels)):
         has_error = False
         error_details = []
+        seen_words = set()
         tokens = test_data[i]["tokens"]
 
         encoding = tokenizer(tokens, is_split_into_words=True)
         valid_word_ids = [w for w in encoding.word_ids() if w is not None]
 
         for j, (t_tag, p_tag) in enumerate(zip(true_seq, pred_seq)):
-            ## condition for a spurious detection
-            if p_tag != "O" and t_tag == "O":
+            if t_tag != p_tag:
                 has_error = True
                 word_idx = valid_word_ids[j]
                 word = tokens[word_idx]
-                error_details.append((word, t_tag, p_tag))
+
+                if word in seen_words:
+                    continue
+                seen_words.add(word)
+                
+                if t_tag == "O" and p_tag != "O":
+                    err_type = "SPURIOUS (False Positive)"
+                elif t_tag != "O" and p_tag == "O":
+                    err_type = "MISSED (False Negative)"
+                else:
+                    err_type = "MISMATCH (Type Error)"
+                
+                error_details.append((word, err_type, t_tag, p_tag))
 
         if has_error:
             print(f"Sentence: {' '.join(tokens)}")
             unique_errors = list(dict.fromkeys(error_details))
-            for word, t, p in unique_errors:
-                print(f" -> Found: '{word}' | Reality: {t} | Prediction: {p}")
-            print("-" * 50)
+            for word, err_type, t, p in unique_errors:
+                print(f" -> [{err_type}] Word: '{word}' | Reality: {t} | Prediction: {p}")
+            print("-" * 60)
 
 ## LEVEL 3: TF Dataset -> Inference & Metrics
 @evaluate_model.register
