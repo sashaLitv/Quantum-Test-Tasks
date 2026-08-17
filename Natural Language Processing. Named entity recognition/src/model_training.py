@@ -19,8 +19,174 @@ import numpy as np
 import random
 import sys
 import argparse
+from functools import singledispatch
+
+def _tokenize_and_align_labels(examples, tokenizer, label2id):
+    ''' 
+        Tokenizes input texts and aligns NER labels with the generated subwords.
+        Special tokens are assigned -100 to be ignored during loss calculation. 
+    '''
+    tokenized = tokenizer(
+        examples["tokens"],
+        truncation=True,
+        is_split_into_words=True
+    )
+
+    aligned_labels = []
+    for i, label in enumerate(examples["ner_tags"]):
+        word_ids = tokenized.word_ids(batch_index=i)  
+        previous_word_idx = None
+        label_ids = []
+        for word_idx in word_ids:  
+            if word_idx is None:
+                label_ids.append(-100)
+            elif word_idx != previous_word_idx: 
+                label_ids.append(label2id[label[word_idx]])
+            else: 
+                ## modified from the official Hugging Face tutorial: assigning I-MOUNTAIN to subwords instead of -100
+                if label[word_idx] == "B-MOUNTAIN": 
+                    label_ids.append(label2id["I-MOUNTAIN"])
+                else:
+                    label_ids.append(label2id[label[word_idx]])
+            previous_word_idx = word_idx
+        aligned_labels.append(label_ids)
+
+    tokenized["labels"] = aligned_labels
+    return tokenized
+
+# ==========================================
+# Evaluation on test data using nervaluate
+# ==========================================
+@singledispatch
+def evaluate_model(data, model, tokenizer=None, batch_size=16):
+    '''
+        Base function that raises an error when the provided data type is not supported.
+    '''
+    raise NotImplementedError(f"Unsupported data type for evaluation: {type(data)}")
+
+## LEVEL 1: String (File Path) -> Loads data
+@evaluate_model.register
+def _(file_path: str, model, tokenizer, batch_size=16):
+    '''
+        Handles evaluation when a file path (str) is provided.
+        Loads the JSON file and passes the raw list of dicts to the next level.
+    '''
+    print(f"Loading test data from {file_path}...")
+    with open(file_path, "r", encoding="utf-8") as f:
+        test_data = json.load(f)
+    
+    ## pass the loaded list of dictionaries to the list-handling method
+    return evaluate_model(test_data, model, tokenizer, batch_size)
+
+## LEVEL 2: List -> Data Prep & Error Analysis
+@evaluate_model.register
+def _(test_data: list, model, tokenizer, batch_size=16):
+    '''
+        Handles evaluation when raw data (list of dicts) is provided.
+        Responsible for data tokenization, dataset preparation, and qualitative Error Analysis.
+    '''
+    label2id = {str(k): int(v) for k, v in model.config.label2id.items()}
+
+    test_dataset = Dataset.from_list(test_data).map(
+        lambda x: _tokenize_and_align_labels(x, tokenizer, label2id), 
+        batched=True
+    )
+    
+    ## initialize the data collator to handle dynamic padding during batching
+    data_collator = DataCollatorForTokenClassification(
+        tokenizer=tokenizer, 
+        return_tensors="tf"
+    )
+
+    tf_test_dataset = test_dataset.to_tf_dataset(
+        collate_fn=data_collator,
+        batch_size=batch_size,
+        shuffle=False, ## must be False to maintain the original sequence order for error analysis
+        columns=["input_ids", "attention_mask"],
+        label_cols=["labels"]
+    )
+
+    ## call LEVEL 3 to perform inference and compute metrics
+    all_true_labels, all_pred_labels = evaluate_model(tf_test_dataset, model, tokenizer, batch_size)
+
+    print("\n--- Error Analysis (Spurious / False Positives) ---")
+    
+    ## iterate through the predictions to find false positives
+    for i, (true_seq, pred_seq) in enumerate(zip(all_true_labels, all_pred_labels)):
+        has_error = False
+        error_details = []
+        tokens = test_data[i]["tokens"]
+
+        encoding = tokenizer(tokens, is_split_into_words=True)
+        valid_word_ids = [w for w in encoding.word_ids() if w is not None]
+
+        for j, (t_tag, p_tag) in enumerate(zip(true_seq, pred_seq)):
+            ## condition for a spurious detection
+            if p_tag != "O" and t_tag == "O":
+                has_error = True
+                word_idx = valid_word_ids[j]
+                word = tokens[word_idx]
+                error_details.append((word, t_tag, p_tag))
+
+        if has_error:
+            print(f"Sentence: {' '.join(tokens)}")
+            unique_errors = list(dict.fromkeys(error_details))
+            for word, t, p in unique_errors:
+                print(f" -> Found: '{word}' | Reality: {t} | Prediction: {p}")
+            print("-" * 50)
+
+## LEVEL 3: TF Dataset -> Inference & Metrics
+@evaluate_model.register
+def _(tf_test_dataset: tf.data.Dataset, model, tokenizer=None, batch_size=16):
+    '''
+        Core evaluation logic for TensorFlow datasets. 
+        Calculates quantitative metrics using nervaluate and returns the exact label sequences.
+    '''
+
+    id2label = {int(k): v for k, v in model.config.id2label.items()}
+
+    all_true_labels = []
+    all_pred_labels = []
+
+    for batch in tf_test_dataset:
+        inputs, labels = batch[0], batch[1]
+
+        ## perform forward pass to get logits 
+        logits = model(**inputs, training=False).logits
+        
+        ## retrieve the most probable class index for each token
+        batch_pred_ids = np.argmax(logits, axis=-1)
+        batch_true_ids = labels.numpy()
+
+        for i in range(len(batch_true_ids)):
+            true_sequence, pred_sequence = [], []
+
+            for t, p in zip(batch_true_ids[i], batch_pred_ids[i]):
+                if t != -100: ## ignore special tokens (like [CLS], [SEP], [PAD]) masked with -100
+                    true_sequence.append(id2label[t])
+                    pred_sequence.append(id2label[p])
+
+            all_true_labels.append(true_sequence)
+            all_pred_labels.append(pred_sequence)
+
+    evaluator = Evaluator(
+        all_true_labels,
+        all_pred_labels,
+        tags=["MOUNTAIN"],
+        loader="list"
+    )
+
+    print("\n--- Evaluation Summary ---")
+    print(evaluator.summary_report())
+
+    ## return sequences back to LEVEL 2 so it can perform the error analysis
+    return all_true_labels, all_pred_labels
 
 def main(args):
+    '''
+        The function for running inferrnce.
+        Accepts the output and dataset directory, seed and model's parameters.
+    '''
     # ==========================================
     # Definition of variables
     # ==========================================
@@ -81,40 +247,10 @@ def main(args):
     # Tokenization using the official Hugging Face tutorial
     # =======================================================
     tokenizer = AutoTokenizer.from_pretrained(args.model_checkpoint)
-    def tokenize_and_align_labels(examples):
-        ''' 
-            Tokenizes input texts and aligns NER labels with the generated subwords.
-            Special tokens are assigned -100 to be ignored during loss calculation. 
-        '''
-        tokenized = tokenizer(
-            examples["tokens"],
-            truncation=True,
-            is_split_into_words=True
-        )
-
-        aligned_labels = []
-        for i, label in enumerate(examples["ner_tags"]):
-            word_ids = tokenized.word_ids(batch_index=i)  
-            previous_word_idx = None
-            label_ids = []
-            for word_idx in word_ids:  
-                if word_idx is None:
-                    label_ids.append(-100)
-                elif word_idx != previous_word_idx: 
-                    label_ids.append(label2id[label[word_idx]])
-                else: 
-                    ## modified from the official Hugging Face tutorial: assigning I-MOUNTAIN to subwords instead of -100
-                    if label[word_idx] == "B-MOUNTAIN": 
-                        label_ids.append(label2id["I-MOUNTAIN"])
-                    else:
-                        label_ids.append(label2id[label[word_idx]])
-                previous_word_idx = word_idx
-            aligned_labels.append(label_ids)
-
-        tokenized["labels"] = aligned_labels
-        return tokenized
-
-    tokenized_datasets = dataset_dict.map(tokenize_and_align_labels, batched=True)
+    tokenized_datasets = dataset_dict.map(
+        lambda examples: _tokenize_and_align_labels(examples, tokenizer, label2id), 
+        batched=True
+    )
 
     ## object that form a batch by using a list of dataset elements as input, may apply some processing (like padding)
     data_collator = DataCollatorForTokenClassification(
@@ -136,14 +272,6 @@ def main(args):
         columns=["input_ids", "attention_mask"],
         label_cols=["labels"]
     )
-    tf_test_dataset = tokenized_datasets["test"].to_tf_dataset(
-        collate_fn=data_collator,
-        batch_size=args.batch_size,
-        shuffle=False,
-        columns=["input_ids", "attention_mask"],
-        label_cols=["labels"]
-    )
-
     # ==========================================
     # Model Initialization and Training
     # ==========================================
@@ -187,41 +315,8 @@ def main(args):
     model.save_pretrained(save_dir)
     tokenizer.save_pretrained(save_dir)
 
+    evaluate_model(tokenized_datasets["test"], model, tokenizer, batch_size = 16)
 
-    # ==========================================
-    # Evaluation on test data using nervaluate
-    # ==========================================
-    all_true_labels = []
-    all_pred_labels = []
-
-    for batch in tf_test_dataset:
-        inputs, labels = batch[0], batch[1]
-        
-        logits = model(**inputs, training=False).logits
-        batch_pred_ids = np.argmax(logits, axis=-1)
-        
-        batch_true_ids = labels.numpy()
-        
-        for i in range(len(batch_true_ids)):
-            true_sequence, pred_sequence = [], []
-            
-            for t, p in zip(batch_true_ids[i], batch_pred_ids[i]):
-                if t != -100: # ignore [CLS], [SEP], and [PAD] tokens
-                # convert IDs back to BIO string labels
-                    true_sequence.append(id2label[t])
-                    pred_sequence.append(id2label[p])
-                    
-            all_true_labels.append(true_sequence)
-            all_pred_labels.append(pred_sequence)
-
-    evaluator = Evaluator(
-        all_true_labels,
-        all_pred_labels,
-        tags=["MOUNTAIN"],
-        loader="list"
-    )
-
-    print(evaluator.summary_report())
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a NER model for Mountain detection using DeBERTa")
