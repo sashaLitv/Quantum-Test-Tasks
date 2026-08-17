@@ -90,19 +90,20 @@ The project is structured to separate the dataset, training logic, and inference
 ## Dataset Generation
 
 The dataset was synthetically generated using the **Gemini API** to ensure a diverse and balanced set of contexts for the `MOUNTAIN` entity. All text examples are tokenized and annotated using the standard **BIO (Begin, Inside, Outside) tagging scheme**. 
-The dataset consists of 2000 examples in total, created under two distinct sets of rules:
+The dataset consists of 2150 examples in total, created under two distinct sets of rules:
 
-**1. Standard Contexts (~1600 examples):**
+**1. Standard Contexts (~1720examples):**
 These examples represent typical occurrences of mountain names in text. They were generated using the following prompt rules:
 ```text
 Rules:
         1. Each sentence MUST contain exactly one name of a prominent mountain from anywhere in the world (e.g., Alps, Andes, Rockies, Caucasus, Himalayas).
-        2. Crucially, mix the naming styles: sometimes use the "Mount X" format (e.g., Mount Blanc), and sometimes use the mountain name directly without any prefix (e.g., Everest, Hoverla, Kilimanjaro).
-        3. Vary the position of the mountain name: place it at the beginning, in the middle, or at the end of sentences across different examples.
-        4. In many sentences, include various surrounding geographical features (e.g., provinces, nearby straits, valleys, rivers, bays, or borders).
-        5. Only the mountain name should be tagged as "B-MOUNTAIN" / "I-MOUNTAIN". ALL other geographical entities MUST be tagged as "O".
+        2. To make the model robust against attention confusion, **some sentences (about 30% of this batch)** can combine a metaphorical/abstract use of a word (like "peak" or "mountain" used for career, tasks, or challenges, tagged as "O") and a real geographical mountain name in the same sentence. Other sentences should use standard descriptive or exploratory contexts.
+        3. Crucially, mix the naming styles: sometimes use the "Mount X" format (e.g., Mount Blanc), and sometimes use the mountain name directly without any prefix (e.g., Everest, Hoverla, Kilimanjaro).
+        4. Vary the position of the mountain name: place it at the beginning, in the middle, or at the end of sentences across different examples.
+        5. In many sentences, include various surrounding geographical features (e.g., provinces, nearby straits, valleys, rivers, bays, or borders).
+        6. Only the mountain name should be tagged as "B-MOUNTAIN" / "I-MOUNTAIN". ALL other geographical entities MUST be tagged as "O".
 ```
-**2. Hard Negatives & Edge Cases (~400 examples):**
+**2. Hard Negatives & Edge Cases (~430 examples):**
 These examples were specifically designed to challenge the model, prevent overfitting. They were generated  with strict instructions to output completely "O" tags for the following five categories:
 ```text
 Categories:
