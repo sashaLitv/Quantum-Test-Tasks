@@ -5,6 +5,8 @@ import rasterio
 from rasterio.windows import Window
 import numpy as np
 import torch
+import argparse
+    
 
 
 class ImagePreprocessor:
@@ -78,4 +80,40 @@ class SatelliteMatcher:
         mkpts1_global = mkpts1_local + offset1
 
         return mkpts0_global, mkpts1_global, confidences
+
+
+def main(args):
+    '''
+        The function for running inference.
+        Accepts paths to images, tile size.
+    '''
+    print(f"Initializing matching process for:\n  img1: {args.img1}\n  img2: {args.img2}")
     
+    preprocessor = ImagePreprocessor(tile_size=args.tile_size)
+    matcher = SatelliteMatcher(device='cpu')
+        
+    tiles_gen0 = preprocessor.extract_tiles(args.img1)
+    tiles_gen1 = preprocessor.extract_tiles(args.img2)
+    total_matches = 0
+        
+    for (tile0, coord0), (tile1, coord1) in zip(tiles_gen0, tiles_gen1):
+        pts0, _, _ = matcher(tile0, tile1, coord0, coord1)
+            
+        if len(pts0) > 0:
+            print(f"Tile at {coord0}: found {len(pts0)} tentative matches.")
+            total_matches += len(pts0)
+                
+    print("-" * 40)
+    print(f"Total tentative matches found across all tiles: {total_matches}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Test Satellite Image Matching classes")
+    parser.add_argument("--img1", type=str, required=True, help="Path to the first satellite image")
+    parser.add_argument("--img2", type=str, required=True, help="Path to the second satellite image")
+    parser.add_argument("--tile_size", type=int, default=256, help="Tile size for processing (default: 256)")
+    args = parser.parse_args()
+
+    main(args)
+
+   

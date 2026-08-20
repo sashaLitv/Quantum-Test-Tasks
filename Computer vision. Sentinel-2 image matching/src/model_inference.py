@@ -6,10 +6,11 @@ import matplotlib.pyplot as plt
 from kornia_moons.feature import draw_LAF_matches
 import kornia.feature as KF
 import torch
+import argparse
 
 @dataclass
 class MatchResult:
-    """Holds matching results between two satellite images."""
+    '''Holds matching results between two satellite images.'''
     image_path0: str
     image_path1: str
     pts0: np.ndarray
@@ -23,15 +24,14 @@ class MatchResult:
 
 
 class MatchingPipeline:
-    """Pipeline for processing and matching satellite images across tiles."""
-    
+    '''Pipeline for processing and matching satellite images across tiles.'''
     def __init__(self, tile_size=512, ransac_threshold=3.0, device='cpu'):
         self.preprocessor = ImagePreprocessor(tile_size)
         self.matcher = SatelliteMatcher(device)
         self.ransac_threshold = ransac_threshold
 
     def _filter_outliers(self, pts0, pts1):
-        """Filter outlier matches using fundamental matrix estimation (RANSAC/MAGSAC)."""
+        '''Filter outlier matches using fundamental matrix estimation (RANSAC/MAGSAC).'''
         magsac_algo = cv2.USAC_MAGSAC if hasattr(cv2, 'USAC_MAGSAC') else cv2.RANSAC
 
         _, inliers_mask = cv2.findFundamentalMat(
@@ -49,7 +49,7 @@ class MatchingPipeline:
         return inliers_mask.ravel().astype(bool)
 
     def __call__(self, image_path0, image_path1):
-        """Execute the matching pipeline for two input image paths"""
+        '''Execute the matching pipeline for two input image paths'''
         tiles_gen0 = self.preprocessor.extract_tiles(image_path0)
         tiles_gen1 = self.preprocessor.extract_tiles(image_path1)
 
@@ -94,7 +94,7 @@ class MatchingPipeline:
         )
     
     def draw_matches(self, matches: MatchResult, show_outliers=False, max_points=150, strategy="best"):
-        """Visualize feature matches between two images."""
+        '''Visualize feature matches between two images.'''
         if matches.is_empty:
             print("Object doesn't have correct matches.")
             return
@@ -163,3 +163,47 @@ class MatchingPipeline:
         plt.axis('off')
         plt.tight_layout()
         plt.show()
+
+def main(args):
+    '''
+        The function for running inference.
+        Accepts paths to images, tile size, ransac_threshold and visualization parameters.
+    '''
+    print(f"Starting matching pipeline for:\n  img1: {args.img1}\n  img2: {args.img2}")
+        
+    pipeline = MatchingPipeline(
+        tile_size=args.tile_size, 
+        ransac_threshold=args.ransac_threshold
+    )
+        
+    results = pipeline(args.img1, args.img2)
+        
+    if results.is_empty:
+        print("Result: no matches found between the images")
+    else:
+        inliers_count = np.sum(results.inliers_mask)
+        total_matches = len(results.pts0)
+            
+        print(f"Matching completed")
+        print(f"Found {inliers_count} inliers out of {total_matches} tentative matches")
+            
+        pipeline.draw_matches(
+            results, 
+            show_outliers=args.show_outliers, 
+            max_points=args.max_points
+        )
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run Satellite Image Matching Inference")
+            
+    parser.add_argument("--img1", type=str, required=True, help="Path to the first satellite image")
+    parser.add_argument("--img2", type=str, required=True, help="Path to the second satellite image")
+            
+    parser.add_argument("--tile_size", type=int, default=512, help="Tile size for processing (default: 512)")
+    parser.add_argument("--ransac_threshold", type=float, default=3.0, help="RANSAC threshold (default: 3.0)")
+    parser.add_argument("--show_outliers", action="store_true", help="Flag to visualize outlier matches (red lines)")
+    parser.add_argument("--max_points", type=int, default=150, help="Maximum number of points to visualize (default: 150)")
+            
+    args = parser.parse_args()
+
+    main(args)
