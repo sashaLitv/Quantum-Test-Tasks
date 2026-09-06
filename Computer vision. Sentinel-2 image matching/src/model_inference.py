@@ -1,10 +1,17 @@
-from algorithm_creation import ImagePreprocessor, SatelliteMatcher
+from algorithm_creation import (
+    GlobalAligner, 
+    ImagePreprocessor, 
+    SatelliteMatcher, 
+    AlgorithmConfig, 
+    InferenceEngine
+)
 import numpy as np
 import cv2
 from dataclasses import dataclass
 import matplotlib.pyplot as plt
 from kornia_moons.feature import draw_LAF_matches
 import kornia.feature as KF
+import kornia
 import torch
 import argparse
 
@@ -25,10 +32,11 @@ class MatchResult:
 
 class MatchingPipeline:
     '''Pipeline for processing and matching satellite images across tiles.'''
-    def __init__(self, tile_size=512, ransac_threshold=3.0, device='cpu'):
-        self.preprocessor = ImagePreprocessor(tile_size)
-        self.matcher = SatelliteMatcher(device)
-        self.ransac_threshold = ransac_threshold
+    def __init__(self, engine: InferenceEngine, config: AlgorithmConfig):
+        self.aligner = GlobalAligner(engine, config.global_max_size, config.ransac_threshold)
+        self.preprocessor = ImagePreprocessor(tile_size=config.global_max_size, overlap=config.overlap)
+        self.matcher = SatelliteMatcher(engine)
+        self.ransac_threshold = config.ransac_threshold
 
     def _filter_outliers(self, pts0, pts1):
         '''Filter outlier matches using fundamental matrix estimation (RANSAC/MAGSAC).'''
@@ -50,14 +58,23 @@ class MatchingPipeline:
 
     def __call__(self, image_path0, image_path1):
         '''Execute the matching pipeline for two input image paths'''
-        tiles_gen0 = self.preprocessor.extract_tiles(image_path0)
-        tiles_gen1 = self.preprocessor.extract_tiles(image_path1)
+        img0_cv = cv2.imread(image_path0, cv2.IMREAD_GRAYSCALE)
+        img1_cv = cv2.imread(image_path1, cv2.IMREAD_GRAYSCALE)
+
+        if img0_cv is None or img1_cv is None:
+            raise ValueError("Error: Could not read images for global alignment.")
+        
+        H = self.aligner.estimate_homography(img0_cv, img1_cv)
+        if np.allclose(H, np.eye(3), atol=1e-4, rtol=1e-4):
+            print("Warning: Global alignment failed or images are identical. Using identity matrix.")
+
+        tile_generator = self.preprocessor.generate_tile_pairs(image_path0, image_path1, H)
 
         all_pts0, all_pts1, all_confs = [], [], []
         
         ## iterate through tiles and find matches locally
-        for (tile0, coord0), (tile1, coord1) in zip(tiles_gen0, tiles_gen1):
-            pts0, pts1, confs = self.matcher(tile0, tile1, coord0, coord1)
+        for tile0, tile1, (x, y) in tile_generator:
+            pts0, pts1, confs = self.matcher(tile0, tile1, x, y, H)
 
             if len(pts0) > 0:
                 all_pts0.append(pts0)
@@ -94,16 +111,24 @@ class MatchingPipeline:
         )
     
     def draw_matches(self, matches: MatchResult, show_outliers=False, max_points=150, strategy="best"):
-        '''Visualize feature matches between two images.'''
+        '''Visualize feature matches between two images using Kornia Moons.'''
         if matches.is_empty:
             print("Object doesn't have correct matches.")
             return
 
-        img0 = cv2.cvtColor(cv2.imread(matches.image_path0), cv2.COLOR_BGR2RGB)
-        img1 = cv2.cvtColor(cv2.imread(matches.image_path1), cv2.COLOR_BGR2RGB)
+        img0_full = cv2.imread(matches.image_path0)
+        img1_full = cv2.imread(matches.image_path1)
 
-        pts0 = matches.pts0
-        pts1 = matches.pts1
+        img0, scale_x0, scale_y0 = GlobalAligner.safe_resize(img0_full, max_size=1500)
+        img1, scale_x1, scale_y1 = GlobalAligner.safe_resize(img1_full, max_size=1500)
+        
+        img0 = cv2.cvtColor(img0, cv2.COLOR_BGR2RGB)
+        img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
+
+        del img0_full, img1_full
+
+        pts0 = matches.pts0.copy() * np.array([scale_x0, scale_y0])
+        pts1 = matches.pts1.copy() * np.array([scale_x1, scale_y1])
         confs = matches.confs
         mask = matches.inliers_mask
 
@@ -171,11 +196,16 @@ def main(args):
     '''
     print(f"Starting matching pipeline for:\n  img1: {args.img1}\n  img2: {args.img2}")
         
-    pipeline = MatchingPipeline(
-        tile_size=args.tile_size, 
+    config = AlgorithmConfig(
+        device=args.device,
+        tile_size=args.tile_size,
+        confidence_threshold=args.confidence_threshold,
         ransac_threshold=args.ransac_threshold
     )
-        
+
+    feature_extractor = kornia.feature.LoFTR(pretrained='outdoor').to(config.device)
+    engine = InferenceEngine(feature_extractor, config)
+    pipeline = MatchingPipeline(engine, config)
     results = pipeline(args.img1, args.img2)
         
     if results.is_empty:
@@ -198,12 +228,12 @@ if __name__ == "__main__":
             
     parser.add_argument("--img1", type=str, required=True, help="Path to the first satellite image")
     parser.add_argument("--img2", type=str, required=True, help="Path to the second satellite image")
-            
+    parser.add_argument("--confidence_threshold", type=float, default=0.8, help="LoFTR confidence threshold (default: 0.8)")
     parser.add_argument("--tile_size", type=int, default=512, help="Tile size for processing (default: 512)")
     parser.add_argument("--ransac_threshold", type=float, default=3.0, help="RANSAC threshold (default: 3.0)")
     parser.add_argument("--show_outliers", action="store_true", help="Flag to visualize outlier matches (red lines)")
     parser.add_argument("--max_points", type=int, default=150, help="Maximum number of points to visualize (default: 150)")
+    parser.add_argument("--device", type=str, default='cpu', help="Type of device (default: 'cpu')")
             
     args = parser.parse_args()
-
     main(args)
